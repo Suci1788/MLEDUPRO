@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>MLBB Edu-Adventure Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" rel="stylesheet">
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, limit } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'mlbb-edu-game-v2';
+
+        window.gameFirebase = { auth, db, appId };
+        window.currentUser = null;
+
+        async function startAuth() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) {
+                console.error("Authentication failed:", err);
+            }
+        }
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                window.currentUser = user;
+                window.listenToLeaderboard();
+            }
+        });
+
+        startAuth();
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@700&family=Roboto:wght@400;700&display=swap');
+
+        :root {
+            --ml-gold: #ffd700;
+            --ml-blue: #1a237e;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Roboto', sans-serif;
+            background-color: #000;
+            color: white;
+            overflow: hidden;
+            touch-action: manipulation;
+        }
+
+        .ml-font { font-family: 'Cinzel', serif; }
+
+        .bg-main {
+            background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.7)), url('https://i.imgur.com/Ei8Z6PK.png');
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+            height: 100dvh;
+        }
+
+        .glass {
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+        }
+
+        .game-layout { display: grid; gap: 1rem; width: 100%; height: 100%; }
+
+        @media (orientation: portrait) {
+            .game-layout { grid-template-rows: auto 1fr auto; }
+            .stats-bar { order: 1; }
+            .content-area { order: 2; }
+            .controls-area { order: 3; }
+            .hero-grid { grid-template-columns: repeat(2, 1fr); }
+            .menu-home { flex-direction: column; overflow-y: auto; }
+        }
+
+        @media (orientation: landscape) {
+            .game-layout { grid-template-columns: 1fr 350px; grid-template-rows: auto 1fr; }
+            .stats-bar { grid-column: span 2; }
+            .hero-grid { grid-template-columns: repeat(3, 1fr); }
+            .menu-home { flex-direction: row; }
+        }
+
+        .btn-ml {
+            background: linear-gradient(to bottom, #c5a059, #8e6d2e);
+            border: 2px solid var(--ml-gold);
+            color: white;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            cursor: pointer;
+        }
+
+        .btn-ml:active { transform: scale(0.95); filter: brightness(1.2); }
+
+        .hero-card { border: 2px solid transparent; transition: 0.3s; cursor: pointer; }
+        .hero-card.selected { border-color: var(--ml-gold); background: rgba(255,215,0,0.1); }
+
+        /* Pop-up Identity */
+        #identity-popup {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.9);
+            z-index: 200;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #splash-screen {
+            position: fixed;
+            inset: 0;
+            background: #fff;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+        }
+
+        .loading-bar { width: 200px; height: 4px; background: #eee; border-radius: 2px; overflow: hidden; margin-top: 20px; }
+        .loading-progress { width: 0%; height: 100%; background: #2563eb; transition: width 0.1s; }
+        
+        img { min-height: 20px; }
+
+        #sound-toggle {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            z-index: 1000;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 50%;
+            background: rgba(0,0,0,0.5);
+            border: 1px solid var(--ml-gold);
+        }
+
+        /* Feedback Colors */
+        .correct-ans { background: #16a34a !important; border-color: #4ade80 !important; }
+        .wrong-ans { background: #dc2626 !important; border-color: #f87171 !important; }
+    </style>
+</head>
+<body class="bg-main">
+
+    <!-- Audio Toggle Button -->
+    <div id="sound-toggle" onclick="toggleMusic()" class="hidden animate__animated animate__fadeIn">
+        <svg id="icon-music-on" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffd700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+        <svg id="icon-music-off" class="hidden" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>
+    </div>
+
+    <!-- Pop-up Identitas -->
+    <div id="identity-popup" class="animate__animated animate__fadeIn">
+        <div class="glass p-8 max-w-sm text-center border-2 border-yellow-500">
+            <img src="https://upload.wikimedia.org/wikipedia/commons/9/9c/Logo_Kemdikbud.png" 
+                 alt="Logo Kemendikdasmen" 
+                 class="w-24 mx-auto mb-4 drop-shadow-lg"
+                 onerror="this.src='https://via.placeholder.com/100?text=LOGO'">
+            
+            <h2 class="ml-font text-yellow-400 text-xl mb-2">MLBB EDU-ADVENTURE</h2>
+            <div class="h-px bg-white/20 w-full my-4"></div>
+            <p class="text-sm text-gray-300 italic mb-1">Created by</p>
+            <p class="font-bold text-lg text-white mb-4">Suci Mega Dian Sari</p>
+            <p class="text-xs text-blue-400 uppercase tracking-widest font-bold">Duta Teknologi Kemendikdasmen<br>Prov. Banten</p>
+            <button onclick="closeIdentity()" class="btn-ml w-full py-3 mt-6 rounded-lg font-bold">MASUK ARENA</button>
+        </div>
+    </div>
+
+    <!-- Splash Screen -->
+    <div id="splash-screen" class="hidden">
+        <h1 class="text-2xl font-bold text-gray-800">MLBB Edu-Adventure</h1>
+        <p class="text-sm text-blue-600 font-medium mt-2">Duta Teknologi Banten</p>
+        <div class="loading-bar">
+            <div id="progress" class="loading-progress"></div>
+        </div>
+    </div>
+
+    <!-- Game UI -->
+    <div id="app" class="hidden h-full p-4 flex flex-col items-center justify-center">
+        
+        <button id="btn-back" onclick="backToHome()" class="hidden fixed top-4 left-4 z-50 glass px-4 py-2 text-xs uppercase font-bold text-white border-white/20">
+            ← Home
+        </button>
+
+        <div id="view-home" class="w-full max-w-6xl h-full flex flex-col items-center justify-center gap-6 animate__animated animate__fadeIn">
+            <div class="menu-home flex gap-6 w-full h-full md:h-auto items-stretch">
+                <div class="flex-1 glass p-6 flex flex-col border-l-4 border-yellow-500">
+                    <h2 class="ml-font text-xl text-yellow-400 mb-4">Tujuan Belajar</h2>
+                    <ul class="space-y-3 text-sm text-gray-200">
+                        <li class="flex gap-2"><span>✅</span> Melatih fokus & refleks kognitif.</li>
+                        <li class="flex gap-2"><span>✅</span> Gamifikasi materi kurikulum.</li>
+                        <li class="flex gap-2"><span>✅</span> Mengasah logika pemecahan soal.</li>
+                    </ul>
+                </div>
+                <div class="flex-1 glass p-8 flex flex-col items-center justify-center text-center">
+                    <h1 class="ml-font text-5xl text-white mb-2">MLBB</h1>
+                    <p class="text-yellow-400 font-bold mb-8 uppercase tracking-widest">Edu-Adventure</p>
+                    <button onclick="changeView('hero')" class="btn-ml w-full py-4 rounded-full font-bold text-lg animate__animated animate__pulse animate__infinite">
+                        MULAI PETUALANGAN
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW HERO -->
+        <div id="view-hero" class="hidden w-full max-w-4xl animate__animated animate__fadeIn">
+            <h2 class="ml-font text-xl text-center text-yellow-400 mb-4">PILIH HERO & MAP</h2>
+            <div class="hero-grid grid gap-3 mb-6 max-h-[50vh] overflow-y-auto pr-2"></div>
+            <div id="hero-info" class="text-center text-xs text-yellow-500 mb-4 h-4"></div>
+            <button id="confirm-hero" disabled onclick="changeView('difficulty')" class="btn-ml w-full py-4 rounded-xl font-bold opacity-50 cursor-not-allowed">KONFIRMASI HERO</button>
+        </div>
+
+        <!-- VIEW DIFFICULTY -->
+        <div id="view-difficulty" class="hidden w-full max-w-sm animate__animated animate__fadeIn">
+            <h2 class="ml-font text-xl text-center text-yellow-400 mb-6">TINGKAT KESULITAN</h2>
+            <div class="grid gap-4">
+                <button onclick="startGame(20, 'Mudah')" class="py-4 bg-green-600 rounded-xl font-bold border-2 border-white/20">MUDAH (20 detik)</button>
+                <button onclick="startGame(12, 'Sedang')" class="py-4 bg-yellow-600 rounded-xl font-bold border-2 border-white/20">SEDANG (12 detik)</button>
+                <button onclick="startGame(7, 'Sulit')" class="py-4 bg-red-600 rounded-xl font-bold border-2 border-white/20">SULIT (7 detik)</button>
+            </div>
+        </div>
+
+        <!-- VIEW ARENA -->
+        <div id="view-arena" class="hidden w-full h-full game-layout animate__animated animate__zoomIn">
+            <div class="stats-bar glass p-3 flex justify-between items-center">
+                <div class="flex flex-col">
+                    <span id="stat-hero" class="text-[10px] text-yellow-500 font-bold uppercase"></span>
+                    <span id="stat-timer" class="text-xl font-mono text-red-400">00:00</span>
+                </div>
+                <div class="text-right">
+                    <span class="text-[10px] text-gray-400 uppercase">Score</span>
+                    <div id="stat-score" class="text-2xl font-bold text-white">0</div>
+                </div>
+            </div>
+            <div class="content-area glass flex flex-col items-center justify-center p-6 text-center">
+                <p id="q-count" class="text-[10px] text-gray-500 mb-2 uppercase tracking-widest"></p>
+                <h3 id="q-text" class="text-lg md:text-2xl font-bold leading-tight">Memuat...</h3>
+            </div>
+            <div id="arena-options" class="controls-area grid grid-cols-1 gap-3"></div>
+        </div>
+
+        <!-- VIEW RESULT -->
+        <div id="view-result" class="hidden w-full max-w-md animate__animated animate__fadeIn">
+            <div class="glass p-6 text-center">
+                <h2 class="ml-font text-2xl text-yellow-400">MATCH OVER</h2>
+                <div id="res-score" class="text-5xl font-bold my-4">0</div>
+                <div id="save-form" class="mb-6">
+                    <input type="text" id="nick" maxlength="12" placeholder="Nickname" class="w-full bg-black/40 border border-white/20 rounded-lg p-3 text-center mb-2 outline-none focus:border-yellow-400 text-white">
+                    <button id="btn-save" onclick="saveScore()" class="btn-ml w-full py-3 rounded-lg font-bold">SIMPAN SKOR</button>
+                </div>
+                <div class="bg-black/40 rounded-lg p-4 max-h-[200px] overflow-y-auto">
+                    <p class="text-[10px] text-yellow-500 font-bold mb-3 uppercase tracking-tighter">🏆 Top Global Ranking</p>
+                    <div id="lb-list" class="space-y-2"></div>
+                </div>
+                <button onclick="backToHome()" class="mt-6 text-sm text-gray-400 underline uppercase">Kembali ke Home</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Audio Elements -->
+    <audio id="bg-music" loop preload="auto">
+        <source src="https://github.com/Suci1788/musikku/raw/refs/heads/main/Ascension_of_the_Valiant.mp3" type="audio/mpeg">
+    </audio>
+
+    <script type="module">
+        import { collection, addDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Logic internal
+        const heroes = [
+            { id: 1, name: 'Zilong', map: 'Pancasila', img: 'https://i.imgur.com/ZsjL4og.jpeg' },
+            { id: 2, name: 'Tigreal', map: 'Matematika', img: 'https://i.imgur.com/bsBwo5M.jpeg' },
+            { id: 3, name: 'Lukas', map: 'IPAS', img: 'https://i.imgur.com/9JSj55g.jpeg' },
+            { id: 4, name: 'Alucard', map: 'B.Indonesia', img: 'https://i.imgur.com/2tGCvwq.jpeg' },
+            { id: 5, name: 'Gatotkaca', map: 'Seni Rupa', img: 'https://i.imgur.com/PNRZcPY.jpeg' }
+        ];
+
+        const questions = {
+            'Pancasila': [
+                {q: "Lambang sila ke-1?", a: ["Bintang", "Rantai", "Pohon", "Padi"], c: 0},
+                {q: "Warna bendera RI?", a: ["Merah Putih", "Biru", "Hijau", "Kuning"], c: 0},
+                {q: "Sila ke-3 berbunyi?", a: ["Persatuan Indonesia", "Keadilan Sosial", "Kemanusiaan", "Ketuhanan"], c: 0},
+                {q: "Lambang sila ke-2?", a: ["Rantai", "Bintang", "Pohon Beringin", "Kepala Banteng"], c: 0},
+                {q: "Bhinneka Tunggal Ika artinya?", a: ["Berbeda tetap satu", "Bersatu teguh", "Maju jaya", "Satu nusa"], c: 0},
+                {q: "Pancasila lahir tanggal?", a: ["1 Juni", "17 Agustus", "1 Oktober", "20 Mei"], c: 0},
+                {q: "Burung Garuda menoleh ke?", a: ["Kanan", "Kiri", "Atas", "Bawah"], c: 0},
+                {q: "Jumlah bulu sayap Garuda?", a: ["17", "8", "45", "19"], c: 0},
+                {q: "Sila ke-5 dilambangkan?", a: ["Padi & Kapas", "Bintang", "Rantai", "Pohon"], c: 0},
+                {q: "Ibukota Indonesia sekarang?", a: ["Jakarta", "Nusantara", "Bandung", "Surabaya"], c: 1}
+            ],
+            'Matematika': [
+                {q: "10 + 15?", a: ["25", "20", "30", "15"], c: 0},
+                {q: "5 x 5?", a: ["25", "10", "15", "20"], c: 0},
+                {q: "100 / 4?", a: ["25", "20", "50", "10"], c: 0},
+                {q: "7 x 8?", a: ["56", "54", "49", "63"], c: 0},
+                {q: "Akar 64?", a: ["8", "6", "7", "9"], c: 0},
+                {q: "Bilangan genap terkecil?", a: ["2", "0", "4", "6"], c: 0},
+                {q: "Sudut siku-siku?", a: ["90°", "180°", "45°", "60°"], c: 0},
+                {q: "Satu jam berapa detik?", a: ["3600", "60", "360", "1200"], c: 0},
+                {q: "15 - 8 + 3?", a: ["10", "9", "8", "7"], c: 0},
+                {q: "Keliling persegi sisi 5?", a: ["20", "25", "15", "10"], c: 0}
+            ],
+            'IPAS': [
+                {q: "Pusat tata surya?", a: ["Matahari", "Bumi", "Bulan", "Mars"], c: 0},
+                {q: "Planet merah?", a: ["Mars", "Venus", "Yupiter", "Saturnus"], c: 0},
+                {q: "Alat pernapasan ikan?", a: ["Insang", "Paru-paru", "Trakea", "Kulit"], c: 0},
+                {q: "Zat hijau daun?", a: ["Klorofil", "Oksigen", "Karbon", "Air"], c: 0},
+                {q: "Benda padat ke cair?", a: ["Mencair", "Membeku", "Menguap", "Menyublim"], c: 0},
+                {q: "Bagian bunga yang indah?", a: ["Mahkota", "Putik", "Benang Sari", "Kelopak"], c: 0},
+                {q: "Tulang belakang disebut?", a: ["Vertebrata", "Invertebrata", "Sendi", "Otot"], c: 0},
+                {q: "Pencernaan dimulai di?", a: ["Mulut", "Lambung", "Usus", "Kerongkongan"], c: 0},
+                {q: "Energi utama bumi?", a: ["Matahari", "Listrik", "Angin", "Air"], c: 0},
+                {q: "Penguapan air laut?", a: ["Evaporasi", "Kondensasi", "Presipitasi", "Infiltrasi"], c: 0}
+            ],
+            'B.Indonesia': [
+                {q: "Lawan kata rajin?", a: ["Malas", "Pintar", "Giat", "Bosan"], c: 0},
+                {q: "Persamaan kata (sinonim) bunga?", a: ["Kembang", "Akar", "Daun", "Pohon"], c: 0},
+                {q: "Ide pokok paragraf disebut?", a: ["Gagasan Utama", "Kalimat Penjelas", "Alur", "Tema"], c: 0},
+                {q: "Sajak pantun adalah?", a: ["a-b-a-b", "a-a-a-a", "b-b-b-b", "a-b-b-a"], c: 0},
+                {q: "Huruf kapital digunakan untuk?", a: ["Nama Orang", "Kata Kerja", "Kata Sifat", "Angka"], c: 0},
+                {q: "Dongeng tentang hewan?", a: ["Fabel", "Mite", "Legenda", "Sage"], c: 0},
+                {q: "Singkatan dari SD?", a: ["Sekolah Dasar", "Siswa Dasar", "Satu Desa", "Sangat Dekat"], c: 0},
+                {q: "Kata tanya untuk tempat?", a: ["Di mana", "Kapan", "Mengapa", "Siapa"], c: 0},
+                {q: "Tanda baca di akhir kalimat tanya?", a: ["?", "!", ".", ","], c: 0},
+                {q: "Puisi lama dua baris?", a: ["Gurindam", "Pantun", "Syair", "Karmina"], c: 3}
+            ],
+            'Seni Rupa': [
+                {q: "Warna primer?", a: ["Merah", "Hijau", "Ungu", "Cokelat"], c: 0},
+                {q: "Campuran biru dan kuning?", a: ["Hijau", "Oranye", "Ungu", "Hitam"], c: 0},
+                {q: "Alat untuk melukis?", a: ["Kuas", "Sendok", "Obeng", "Gergaji"], c: 0},
+                {q: "Warna netral?", a: ["Hitam/Putih", "Merah", "Biru", "Kuning"], c: 0},
+                {q: "Seni melipat kertas?", a: ["Origami", "Kolase", "Mozaik", "Anyaman"], c: 0},
+                {q: "Gambar orang dari samping?", a: ["Siluet", "Potret", "Landscape", "Abstrak"], c: 0},
+                {q: "Candi Borobudur terletak di?", a: ["Jawa Tengah", "Jawa Barat", "Bali", "Papua"], c: 0},
+                {q: "Patung termasuk karya seni... dimensi?", a: ["3", "2", "1", "4"], c: 0},
+                {q: "Bahan membuat keramik?", a: ["Tanah Liat", "Batu", "Kayu", "Plastik"], c: 0},
+                {q: "Teknik menempel kertas?", a: ["Kolase", "Lukis", "Pahat", "Cetak"], c: 0}
+            ]
+        };
+
+        let state = { view: 'home', hero: null, score: 0, timer: null, timeLeft: 0, currentQIdx: 0, activeQuestions: [], canAnswer: true, isMuted: false };
+
+        window.toggleMusic = () => {
+            const music = document.getElementById('bg-music');
+            const iconOn = document.getElementById('icon-music-on');
+            const iconOff = document.getElementById('icon-music-off');
+            
+            if (music.paused) {
+                music.play().catch(e => console.log("Audio play error"));
+                iconOn.classList.remove('hidden');
+                iconOff.classList.add('hidden');
+                state.isMuted = false;
+            } else {
+                music.pause();
+                iconOn.classList.add('hidden');
+                iconOff.classList.remove('hidden');
+                state.isMuted = true;
+            }
+        };
+
+        window.closeIdentity = () => {
+            const popup = document.getElementById('identity-popup');
+            popup.classList.add('animate__fadeOut');
+            
+            const music = document.getElementById('bg-music');
+            music.play().catch(e => console.log("Audio interaction required"));
+            
+            setTimeout(() => {
+                popup.style.display = 'none';
+                document.getElementById('splash-screen').classList.remove('hidden');
+                startSplash();
+            }, 500);
+        };
+
+        function startSplash() {
+            let progress = 0;
+            const interval = setInterval(() => {
+                progress += Math.random() * 20;
+                document.getElementById('progress').style.width = `${progress}%`;
+                if(progress >= 100) {
+                    clearInterval(interval);
+                    document.getElementById('splash-screen').classList.add('animate__fadeOut');
+                    setTimeout(() => {
+                        document.getElementById('splash-screen').style.display = 'none';
+                        document.getElementById('app').classList.remove('hidden');
+                        document.getElementById('sound-toggle').classList.remove('hidden');
+                    }, 500);
+                }
+            }, 200);
+        }
+
+        window.changeView = (viewName) => {
+            document.querySelectorAll('#app > div').forEach(div => div.classList.add('hidden'));
+            document.getElementById(`view-${viewName}`).classList.remove('hidden');
+            state.view = viewName;
+            document.getElementById('btn-back').style.display = viewName === 'home' ? 'none' : 'block';
+            if(viewName === 'hero') renderHeroGrid();
+        };
+
+        window.backToHome = () => { clearInterval(state.timer); changeView('home'); };
+
+        function renderHeroGrid() {
+            const grid = document.querySelector('.hero-grid');
+            grid.innerHTML = '';
+            heroes.forEach(h => {
+                const card = document.createElement('div');
+                card.className = `hero-card glass p-2 rounded-lg text-center ${state.hero?.id === h.id ? 'selected' : ''}`;
+                card.onclick = () => {
+                    state.hero = h;
+                    renderHeroGrid();
+                    document.getElementById('hero-info').innerText = `${h.name} @ Map ${h.map}`;
+                    const nextBtn = document.getElementById('confirm-hero');
+                    nextBtn.disabled = false;
+                    nextBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                };
+                card.innerHTML = `<img src="${h.img}" class="w-full aspect-square object-cover rounded mb-2"><p class="text-[10px] font-bold truncate">${h.name}</p>`;
+                grid.appendChild(card);
+            });
+        }
+
+        window.startGame = (time, diff) => {
+            state.score = 0;
+            state.timeLeft = time;
+            state.currentQIdx = 0;
+            state.activeQuestions = [...(questions[state.hero.map] || questions['Pancasila'])].sort(() => Math.random() - 0.5);
+            document.getElementById('stat-hero').innerText = `${state.hero.name} | ${diff}`;
+            document.getElementById('stat-score').innerText = '0';
+            changeView('arena');
+            nextQuestion();
+        };
+
+        function nextQuestion() {
+            if(state.currentQIdx >= state.activeQuestions.length) return endMatch();
+            state.canAnswer = true;
+            const q = state.activeQuestions[state.currentQIdx];
+            
+            // Logika baru: Acak pilihan jawaban
+            // Kita buat array objek {teks, apakahBenar}
+            const correctText = q.a[q.c];
+            const shuffledOptions = q.a.map((text, idx) => ({
+                text: text,
+                isCorrect: idx === q.c
+            })).sort(() => Math.random() - 0.5);
+
+            document.getElementById('q-count').innerText = `Stage ${state.currentQIdx + 1} / ${state.activeQuestions.length}`;
+            document.getElementById('q-text').innerText = q.q;
+            
+            const options = document.getElementById('arena-options');
+            options.innerHTML = '';
+            
+            shuffledOptions.forEach((opt) => {
+                const btn = document.createElement('button');
+                btn.className = "btn-ml py-4 rounded-xl font-bold text-sm shadow-lg transition-colors duration-200";
+                btn.innerText = opt.text;
+                btn.onclick = () => processAnswer(opt.isCorrect, btn);
+                options.appendChild(btn);
+            });
+            
+            startTimer();
+        }
+
+        function startTimer() {
+            clearInterval(state.timer);
+            let time = state.timeLeft;
+            document.getElementById('stat-timer').innerText = `00:${time.toString().padStart(2, '0')}`;
+            state.timer = setInterval(() => {
+                time--;
+                document.getElementById('stat-timer').innerText = `00:${time.toString().padStart(2, '0')}`;
+                if(time <= 0) { clearInterval(state.timer); processAnswer(false, null, true); }
+            }, 1000);
+        }
+
+        function processAnswer(isCorrect, btn, isTimeout = false) {
+            if(!state.canAnswer && !isTimeout) return;
+            state.canAnswer = false;
+            clearInterval(state.timer);
+            
+            const qText = document.getElementById('q-text');
+            
+            if(isCorrect) {
+                state.score += 10;
+                document.getElementById('stat-score').innerText = state.score;
+                if(btn) btn.classList.add('correct-ans');
+                qText.innerText = "VICTORY!";
+            } else {
+                if(btn) btn.classList.add('wrong-ans');
+                qText.innerText = isTimeout ? "WAKTU HABIS!" : "DEFEAT!";
+                
+                // Efek getar jika salah
+                if ("vibrate" in navigator) {
+                    navigator.vibrate([100, 50, 100]);
+                }
+            }
+            
+            setTimeout(() => { state.currentQIdx++; nextQuestion(); }, 1000);
+        }
+
+        function endMatch() { changeView('result'); document.getElementById('res-score').innerText = state.score; document.getElementById('save-form').classList.remove('hidden'); }
+
+        window.saveScore = async () => {
+            if (!window.currentUser) return;
+            const nick = document.getElementById('nick').value.trim() || "Warrior";
+            const btn = document.getElementById('btn-save');
+            btn.disabled = true;
+            btn.innerText = "SAVING...";
+            try {
+                const collRef = collection(window.gameFirebase.db, 'artifacts', window.gameFirebase.appId, 'public', 'data', 'leaderboard');
+                await addDoc(collRef, { name: nick, score: state.score, hero: state.hero.name, uid: window.currentUser.uid, timestamp: Date.now() });
+                document.getElementById('save-form').classList.add('hidden');
+            } catch (err) { console.error("Save error:", err); } 
+            finally { btn.disabled = false; btn.innerText = "SIMPAN SKOR"; }
+        };
+
+        window.listenToLeaderboard = () => {
+            if (!window.currentUser) return;
+            const collRef = collection(window.gameFirebase.db, 'artifacts', window.gameFirebase.appId, 'public', 'data', 'leaderboard');
+            onSnapshot(collRef, (snap) => {
+                let data = [];
+                snap.forEach(doc => data.push(doc.data()));
+                data.sort((a, b) => b.score - a.score);
+                data = data.slice(0, 10);
+                const list = document.getElementById('lb-list');
+                list.innerHTML = '';
+                data.forEach((l, i) => {
+                    list.innerHTML += `<div class="flex justify-between items-center bg-white/5 p-2 rounded border border-white/5"><span class="text-[10px] font-bold text-white">${i+1}. ${l.name} <span class="text-gray-500 font-normal">(${l.hero})</span></span><span class="text-[10px] font-bold text-yellow-500">${l.score} PTS</span></div>`;
+                });
+            }, (err) => console.error(err));
+        };
+    </script>
+</body>
+</html>
